@@ -1,0 +1,92 @@
+
+import { GoogleGenAI, Type, Modality } from "@google/genai";
+import { UserAnswer, AnalysisResult } from "../types";
+
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY || "" });
+
+export const analyzeInterests = async (answers: UserAnswer[]): Promise<AnalysisResult> => {
+  const prompt = `Aşağıdaki cevapları veren bir ilkokul öğrencisinin ilgi alanlarını analiz et ve ona çok eğlenceli, yüreklendirici bir "Yıldız Profil" oluştur. 
+  Cevaplar: ${answers.map(a => `Soru: ${a.questionText}, Cevap: ${a.answerText}`).join(' | ')}.
+  
+  Lütfen bir çocuk diliyle konuş, onu çok zeki ve yetenekli hissettir.`;
+
+  const response = await ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: prompt,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          title: { type: Type.STRING, description: "Öğrenciye verilecek eğlenceli bir unvan (örn: Doğa Kaşifi)" },
+          summary: { type: Type.STRING, description: "İlgi alanlarının kısa ve eğlenceli özeti" },
+          hobbies: { 
+            type: Type.ARRAY, 
+            items: { type: Type.STRING },
+            description: "Öğrenciye önerilen 3 yeni hobi"
+          },
+          futureCareer: { type: Type.STRING, description: "Gelecekteki 'süper' mesleği" },
+          encouragement: { type: Type.STRING, description: "Onu motive edecek bir kapanış mesajı" }
+        },
+        required: ["title", "summary", "hobbies", "futureCareer", "encouragement"]
+      }
+    }
+  });
+
+  return JSON.parse(response.text);
+};
+
+export async function speakText(text: string): Promise<void> {
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash-preview-tts",
+    contents: [{ parts: [{ text: `Neşeli bir çocuk ses tonuyla oku: ${text}` }] }],
+    config: {
+      responseModalities: [Modality.AUDIO],
+      speechConfig: {
+        voiceConfig: {
+          prebuiltVoiceConfig: { voiceName: 'Kore' },
+        },
+      },
+    },
+  });
+
+  const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
+  if (!base64Audio) return;
+
+  const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
+  const audioData = decode(base64Audio);
+  const audioBuffer = await decodeAudioData(audioData, audioContext, 24000, 1);
+  const source = audioContext.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(audioContext.destination);
+  source.start();
+}
+
+function decode(base64: string) {
+  const binaryString = atob(base64);
+  const len = binaryString.length;
+  const bytes = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    bytes[i] = binaryString.charCodeAt(i);
+  }
+  return bytes;
+}
+
+async function decodeAudioData(
+  data: Uint8Array,
+  ctx: AudioContext,
+  sampleRate: number,
+  numChannels: number,
+): Promise<AudioBuffer> {
+  const dataInt16 = new Int16Array(data.buffer);
+  const frameCount = dataInt16.length / numChannels;
+  const buffer = ctx.createBuffer(numChannels, frameCount, sampleRate);
+
+  for (let channel = 0; channel < numChannels; channel++) {
+    const channelData = buffer.getChannelData(channel);
+    for (let i = 0; i < frameCount; i++) {
+      channelData[i] = dataInt16[i * numChannels + channel] / 32768.0;
+    }
+  }
+  return buffer;
+}
